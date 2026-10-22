@@ -129,7 +129,10 @@ async def plan_incident(payload: dict) -> dict:
             break
         try:
             result = await _call_model(prompt_data, timeout=remaining - 1.5)
-        except Exception:
+        except Exception as e:
+            resp = getattr(e, "response", None)
+            print("planner_error", type(e).__name__, getattr(resp, "status_code", None),
+                  (getattr(resp, "text", "") or str(e))[:300].replace(GEMINI_API_KEY or "<none>", "[KEY]"), flush=True)
             result = {}
         diagnosis, diagnostics, effect = _clean(result, incident, catalog, policy, lines)
         if diagnostics and effect:
