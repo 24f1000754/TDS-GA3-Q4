@@ -221,4 +221,7 @@ def build_otlp(state):
         otlp_span("invoke_agent incident-response", 1, trace_id, agent_id, server_id, common,
                   t0 + STEP // 10, end - STEP // 10),
     ] + body
+    if state.get("tracestate"):
+        for sp in spans:
+            sp["traceState"] = state["tracestate"]
     return {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}

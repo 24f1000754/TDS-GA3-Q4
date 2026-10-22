@@ -133,6 +133,7 @@ async def plan_incident(payload: dict) -> dict:
     models = [m.strip() for m in GEMINI_MODEL.split(",") if m.strip()]
     used = models[0]
     diagnosis, diagnostics, effect = None, [], None
+    raws = []
     for model in (models * 2)[:4]:
         remaining = 15.0 - (time.monotonic() - start)
         if remaining < 3:
@@ -144,10 +145,17 @@ async def plan_incident(payload: dict) -> dict:
             print("planner_error", model, type(e).__name__, getattr(resp, "status_code", None),
                   (getattr(resp, "text", "") or str(e))[:200].replace(GEMINI_API_KEY or "<none>", "[KEY]"), flush=True)
             continue
+        raws.append({"model": model, "raw": result})
         diagnosis, diagnostics, effect = _clean(result, incident, catalog, policy, lines)
         used = model
         if diagnostics and effect:
             break
     if diagnosis is None:
         diagnosis, diagnostics, effect = _clean({}, incident, catalog, policy, lines)
+    if os.environ.get("DEBUG_PLAN", "1") == "1":
+        cited = {k: lines.get(k, "")[:300] for k in diagnosis["evidence"]}
+        print("DEBUG_PLAN", json.dumps({
+            "meta": {k: incident.get(k) for k in ("incidentId", "title", "service", "severity", "allowedRootCauses")},
+            "policy": policy, "catalog": catalog, "raw": raws, "cleanedDiagnostics": diagnostics,
+            "cleanedEffect": effect, "citedEvidence": cited, "nLines": len(lines)}, ensure_ascii=False)[:12000], flush=True)
     return {"diagnosis": diagnosis, "diagnostics": diagnostics, "effect": effect, "model": used}

@@ -40,7 +40,7 @@ def check_trace(pub, expect_join):
 
 # Scenario A: parallel diag, one 503 retry, approval, effect success
 s = create_state(payload(), plan(), "00-" + "a"*32 + "-" + "b"*16 + "-01", "vendor=x")
-p = public_state(s); assert len(p["dispatches"]) == 2 and p["dispatches"][0]["tracestate"] == "vendor=x"
+p = public_state(s); assert p["chosenEffect"] is None and len(p["dispatches"]) == 2 and p["dispatches"][0]["tracestate"] == "vendor=x"
 assert p["dispatches"][0]["traceparent"].split("-")[1] == "a"*32
 d1, d2 = p["dispatches"]
 s = apply_receipt(s, "receipt_0001", {"receiptId": "receipt_0001", "outcomes": [out(d1, 503, "x"), out(d2)]})
@@ -54,6 +54,7 @@ p = public_state(s); e = p["dispatches"][0]
 assert e["phase"] == "effect" and e["approvalId"] == ap["approvalId"] and e["approvalNonce"] == "n-1" and e["actionId"] == ap["actionId"]
 s = apply_receipt(s, "receipt_0004", {"receiptId": "receipt_0004", "outcomes": [out(e, 200, "done")]})
 p = public_state(s); assert p["status"] == "completed" and p["dispatches"] == [] and p["approvals"] == []
+assert p["chosenEffect"] == "rollback_deployment"
 assert any("approvalId" in r for r in p["receiptLog"])
 print("A spans:", check_trace(p, True))
 cs = [x for x in p["otlp"]["resourceSpans"][0]["scopeSpans"][0]["spans"] if x["name"].startswith("POST tool/")]

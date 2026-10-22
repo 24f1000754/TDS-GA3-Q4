@@ -47,7 +47,7 @@ def create_state(payload, plan, traceparent=None, tracestate=None):
     inc = valid_traceparent(traceparent)
     state = {
         "runId": payload["runId"], "publicMarker": payload["publicMarker"], "status": "waiting",
-        "diagnosis": plan["diagnosis"], "chosenEffect": (plan.get("effect") or {}).get("toolName"),
+        "diagnosis": plan["diagnosis"], "chosenEffect": None,
         "suppressed": [], "actionLog": [], "receiptLog": [], "dispatches": [], "approvals": [],
         "pending": {}, "diagResults": {}, "effectIssued": False, "effectPlan": plan.get("effect"),
         "traceId": inc["trace_id"] if inc else new_trace_id(),
@@ -86,6 +86,7 @@ def _decide(state, new):
     if name not in tools or not validate_arguments(tools[name], effect["arguments"]):
         return _fail(state, "invalid_effect_arguments", name)
     state["effectIssued"] = True
+    state["chosenEffect"] = name
     needs = set(state["policy"].get("approvalRequiredFor") or []) | DESTRUCTIVE
     if name in needs:
         state["approvals"] = [{"approvalId": opaque_id("approval"), "actionId": opaque_id("action"),
