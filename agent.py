@@ -6,7 +6,8 @@ import time
 import httpx
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_THINKING = os.environ.get("GEMINI_THINKING", "low")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 SYSTEM = (
@@ -52,16 +53,23 @@ def _fallback(incident, lines):
     return {"rootCause": str(best), "evidence": ids}
 
 
-async def _call_model(prompt_data: dict, timeout: float) -> dict:
+async def _call_model(model: str, prompt_data: dict, timeout: float) -> dict:
     headers = {"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
-    body = {
-        "systemInstruction": {"parts": [{"text": SYSTEM}]},
-        "contents": [{"role": "user", "parts": [{"text": RULES + "\n\nDATA:\n" + json.dumps(prompt_data, ensure_ascii=False)}]}],
-        "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
-    }
+    base_cfg = {"temperature": 0, "responseMimeType": "application/json"}
+    user = RULES + "\n\nDATA:\n" + json.dumps(prompt_data, ensure_ascii=False)
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=3.0)) as client:
-        r = await client.post(GEMINI_URL.format(model=GEMINI_MODEL), headers=headers, json=body)
-        r.raise_for_status()
+        for use_thinking in (True, False):
+            cfg = dict(base_cfg)
+            if use_thinking and GEMINI_THINKING:
+                cfg["thinkingConfig"] = {"thinkingLevel": GEMINI_THINKING}
+            body = {"systemInstruction": {"parts": [{"text": SYSTEM}]},
+                    "contents": [{"role": "user", "parts": [{"text": user}]}],
+                    "generationConfig": cfg}
+            r = await client.post(GEMINI_URL.format(model=model), headers=headers, json=body)
+            if r.status_code == 400 and use_thinking and GEMINI_THINKING:
+                continue  # this model may not accept thinkingLevel; retry without it
+            r.raise_for_status()
+            break
         text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     text = re.sub(r"^```(?:json)?|```$", "", text.strip()).strip()
     return json.loads(text)
@@ -122,19 +130,24 @@ async def plan_incident(payload: dict) -> dict:
                    "approvalRequiredFor": policy.get("approvalRequiredFor", [])},
     }
     start = time.monotonic()
-    result, diagnosis, diagnostics, effect = {}, None, [], None
-    for attempt in range(2):
+    models = [m.strip() for m in GEMINI_MODEL.split(",") if m.strip()]
+    used = models[0]
+    diagnosis, diagnostics, effect = None, [], None
+    for model in (models * 2)[:4]:
         remaining = 15.0 - (time.monotonic() - start)
-        if remaining < 4:
+        if remaining < 3:
             break
         try:
-            result = await _call_model(prompt_data, timeout=remaining - 1.5)
+            result = await _call_model(model, prompt_data, timeout=remaining - 1.5)
         except Exception as e:
             resp = getattr(e, "response", None)
-            print("planner_error", type(e).__name__, getattr(resp, "status_code", None),
-                  (getattr(resp, "text", "") or str(e))[:300].replace(GEMINI_API_KEY or "<none>", "[KEY]"), flush=True)
-            result = {}
+            print("planner_error", model, type(e).__name__, getattr(resp, "status_code", None),
+                  (getattr(resp, "text", "") or str(e))[:200].replace(GEMINI_API_KEY or "<none>", "[KEY]"), flush=True)
+            continue
         diagnosis, diagnostics, effect = _clean(result, incident, catalog, policy, lines)
+        used = model
         if diagnostics and effect:
             break
-    return {"diagnosis": diagnosis, "diagnostics": diagnostics, "effect": effect, "model": GEMINI_MODEL}
+    if diagnosis is None:
+        diagnosis, diagnostics, effect = _clean({}, incident, catalog, policy, lines)
+    return {"diagnosis": diagnosis, "diagnostics": diagnostics, "effect": effect, "model": used}
